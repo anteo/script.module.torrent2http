@@ -1,3 +1,6 @@
+[B]Version 0.0.4[/B]
++ Added some mime types for better detection
+
 [B]Version 0.0.3[/B]
 + Detect media types
 
