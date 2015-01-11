@@ -1,0 +1,8 @@
+[B]Version 0.0.3[/B]
++ Detect media types
+
+[B]Version 0.0.2[/B]
++ Added some configurable libtorrent options
+
+[B]Version 0.0.1[/B]
++ Initial release
