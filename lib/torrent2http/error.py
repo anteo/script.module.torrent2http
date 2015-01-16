@@ -1,6 +1,7 @@
 
 class Error(Exception):
     TORRENT_ERROR = 12
+    CRASHED = 13
     UNKNOWN_PLATFORM = 1
     XBMC_HOME_NOT_DEFINED = 2
     NOEXEC_FILESYSTEM = 3

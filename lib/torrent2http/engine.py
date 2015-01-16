@@ -150,6 +150,7 @@ class Engine:
         self.uri = uri
         self.logpipe = None
         self.process = None
+        self.started = False
 
     @staticmethod
     def _validate_save_path(path):
@@ -246,6 +247,7 @@ class Engine:
             raise Error("Can't start torrent2http: %r" % e, Error.POPEN_ERROR)
 
         start = time.time()
+        self.started = True
         initialized = False
         while (time.time() - start) < self.startup_timeout:
             time.sleep(0.1)
@@ -259,6 +261,7 @@ class Engine:
                 pass
 
         if not initialized:
+            self.started = False
             raise Error("Can't start torrent2http, time is out", Error.TIMEOUT)
         self._log("torrent2http successfully started.")
 
@@ -323,7 +326,7 @@ class Engine:
             raise Error("Can't decode response from torrent2http: %r" % e, Error.REQUEST_ERROR)
 
     def _request(self, cmd, timeout=None):
-        if not self.is_alive():
+        if not self.started:
             raise Error("torrent2http is not started", Error.REQUEST_ERROR)
         try:
             url = "http://%s:%s/%s" % (self.bind_host, self.bind_port, cmd)
@@ -334,6 +337,8 @@ class Engine:
         except urllib2.URLError as e:
             if isinstance(e.reason, socket.timeout):
                 raise Error("Timeout occurred while sending command '%s' to torrent2http" % cmd, Error.TIMEOUT)
+            elif not self.is_alive() and self.started:
+                raise Error("torrent2http has crashed.", Error.CRASHED)
             else:
                 raise Error("Can't send command '%s' to torrent2http: %r" % (cmd, e), Error.REQUEST_ERROR)
         except socket.error as e:
@@ -364,5 +369,6 @@ class Engine:
                 else:
                     self._log("torrent2http successfully shut down.")
                 self.wait_on_close_timeout = None
+        self.started = False
         self.logpipe = None
         self.process = None
