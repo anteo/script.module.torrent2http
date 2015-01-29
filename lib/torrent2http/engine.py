@@ -7,17 +7,22 @@ import subprocess
 import sys
 import time
 import urllib2
+import httplib
+from os.path import dirname
+
 import logpipe
 import mimetypes
 import xbmc
-
 from error import Error
 from platform import Platform
 from . import SessionStatus, FileStatus, PeerInfo, MediaType, Encryption
-from os.path import dirname
+from util import can_bind, find_free_port, ensure_fs_encoding
 
 
 class Engine:
+    """
+    This is python binding class to torrent2http client.
+    """
     SUBTITLES_FORMATS = ['.aqt', '.gsub', '.jss', '.sub', '.ttxt', '.pjs', '.psb', '.rt', '.smi', '.stl',
                          '.ssf', '.srt', '.ssa', '.ass', '.usf', '.idx']
 
@@ -42,6 +47,12 @@ class Engine:
             xbmc.log("[torrent2http] %s" % message)
 
     def _get_binary_path(self, binaries_path):
+        """
+        Detects platform and returns corresponding torrent2http binary path
+
+        :param binaries_path:
+        :return: torrent2http binary path
+        """
         binary = "torrent2http" + (".exe" if self.platform.system == 'windows' else "")
         binary_dir = os.path.join(binaries_path, "%s_%s" % (self.platform.system, self.platform.arch))
         binary_path = os.path.join(binary_dir, binary)
@@ -74,27 +85,6 @@ class Engine:
         self._log("Selected %s as torrent2http binary" % binary_path)
         return binary_path
 
-    @staticmethod
-    def _can_bind(host, port):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind((host, port))
-            s.close()
-        except socket.error:
-            return False
-        return True
-
-    @staticmethod
-    def _find_free_port(host):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind((host, 0))
-            port = s.getsockname()[1]
-            s.close()
-        except socket.error:
-            return False
-        return port
-
     def __init__(self, uri=None, binaries_path=None, platform=None, download_path=".",
                  bind_host='127.0.0.1', bind_port=5001, connections_limit=None, download_kbps=None, upload_kbps=None,
                  enable_dht=True, enable_lsd=True, enable_natpmp=True, enable_upnp=True, enable_scrape=False,
@@ -105,6 +95,55 @@ class Engine:
                  debug_alerts=False, logger=None, torrent_connect_boost=50, connection_speed=50,
                  peer_connect_timeout=15, request_timeout=20, min_reconnect_time=60, max_failcount=3,
                  dht_routers=None, trackers=None):
+        """
+        Creates engine instance. It doesn't do anything except initializing object members. For starting engine use
+        start() method.
+
+        :param uri: Torrent URI (magnet://, file:// or http://)
+        :param binaries_path: Path to torrent2http binaries
+        :param platform: Object with two methods implemented: arch() and system()
+        :param download_path: Torrent download path
+        :param bind_host: Bind host of torrent2http
+        :param bind_port: Bind port of torrent2http
+        :param connections_limit: Set a global limit on the number of connections opened
+        :param download_kbps: Max download rate (kB/s)
+        :param upload_kbps: Max upload rate (kB/s)
+        :param enable_dht: Enable DHT (Distributed Hash Table)
+        :param enable_lsd: Enable LSD (Local Service Discovery)
+        :param enable_natpmp: Enable NATPMP (NAT port-mapping)
+        :param enable_upnp: Enable UPnP (UPnP port-mapping)
+        :param enable_scrape: Enable sending scrape request to tracker (updates total peers/seeds count)
+        :param log_stats: Log all stats (incl. log_overall_progress, log_files_progress, log_pieces_progress)
+        :param encryption: Encryption: 0=forced 1=enabled (default) 2=disabled
+        :param keep_complete: Keep complete files after exiting
+        :param keep_incomplete: Keep incomplete files after exiting
+        :param keep_files: Keep all files after exiting (incl. keep_complete and keep_incomplete)
+        :param log_files_progress: Log files progress
+        :param log_overall_progress: Log overall progress
+        :param log_pieces_progress: Log pieces progress
+        :param listen_port: Use specified port for incoming connections
+        :param use_random_port: Use random listen port (49152-65535)
+        :param max_idle_timeout: Automatically shutdown torrent2http if no connection are active after a timeout
+        :param no_sparse: Do not use sparse file allocation
+        :param resume_file: Use fast resume file
+        :param user_agent: Set an user agent
+        :param startup_timeout: torrent2http startup timeout
+        :param state_file: Use file for saving/restoring session state
+        :param enable_utp: Enable uTP protocol
+        :param enable_tcp: Enable TCP protocol
+        :param debug_alerts: Show debug alert notifications
+        :param logger: Instance of logging.Logger
+        :param torrent_connect_boost: The number of peers to try to connect to immediately when the first tracker
+            response is received for a torrent
+        :param connection_speed: The number of peer connection attempts that are made per second
+        :param peer_connect_timeout: The number of seconds to wait after a connection attempt is initiated to a peer
+        :param request_timeout: The number of seconds until the current front piece request will time out
+        :param min_reconnect_time: The time to wait between peer connection attempts. If the peer fails, the time is
+            multiplied by fail counter
+        :param max_failcount: The maximum times we try to connect to a peer before stop connecting again
+        :param dht_routers: List of additional DHT routers (host:port pairs)
+        :param trackers: List of additional tracker URLs
+        """
         self.dht_routers = dht_routers or []
         self.trackers = trackers or []
         self.max_failcount = max_failcount
@@ -154,21 +193,36 @@ class Engine:
 
     @staticmethod
     def _validate_save_path(path):
+        """
+        Ensures download path can be accessed locally.
+
+        :param path: Download path
+        :return: Translated path
+        """
+        import xbmc
+        path = xbmc.translatePath(path)
         if "://" in path:
             if sys.platform.startswith('win') and path.lower().startswith("smb://"):
                 path = path.replace("smb:", "").replace("/", "\\")
             else:
                 raise Error("Downloading to an unmounted network share is not supported", Error.INVALID_DOWNLOAD_PATH)
-        if not os.path.isdir(path):
+        if not os.path.isdir(ensure_fs_encoding(path)):
             raise Error("Download path doesn't exist (%s)" % path, Error.INVALID_DOWNLOAD_PATH)
         return path
 
     def start(self, start_index=None):
+        """
+        Starts torrent2http client with specified settings. If it can be started in startup_timeout seconds, exception
+        will be raised.
+
+        :param start_index: File index to start download instantly, if not specified, downloading will be paused, until
+            any file requested
+        """
         self.platform = self.platform or Platform()
         binary_path = self._get_binary_path(self.binaries_path)
         download_path = self._validate_save_path(self.download_path)
-        if not self._can_bind(self.bind_host, self.bind_port):
-            port = self._find_free_port(self.bind_host)
+        if not can_bind(self.bind_host, self.bind_port):
+            port = find_free_port(self.bind_host)
             if port is False:
                 raise Error("Can't find port to bind torrent2http", Error.BIND_ERROR)
             self._log("Can't bind to %s:%s, so we found another port: %d" % (self.bind_host, self.bind_port, port))
@@ -225,10 +279,8 @@ class Engine:
                         args.append("%s=false" % k)
                 else:
                     args.append(k)
-                    if isinstance(v, str):
-                        v = v.decode('utf-8')
-                    if isinstance(v, unicode):
-                        v = v.encode(sys.getfilesystemencoding() or 'utf-8')
+                    if isinstance(v, str) or isinstance(v, unicode):
+                        v = ensure_fs_encoding(v)
                     else:
                         v = str(v)
                     args.append(v)
@@ -266,12 +318,25 @@ class Engine:
         self._log("torrent2http successfully started.")
 
     def check_torrent_error(self, status=None):
+        """
+        It is recommended to call this method periodically to check if any libtorrent errors occurred.
+        Usually libtorrent sets error if it can't download or parse torrent file by specified URI.
+        Note that torrent2http remains started after such error, so you need to shutdown it manually.
+
+        :param status: Pass return of status() method if you don't want status() called twice
+        """
         if not status:
             status = self.status()
         if status.error:
             raise Error("Torrent error: %s" % status.error, Error.TORRENT_ERROR, reason=status.error)
 
     def status(self, timeout=10):
+        """
+        Returns libtorrent session status. See SessionStatus named tuple.
+
+        :rtype : SessionStatus
+        :param timeout: torrent2http client request timeout
+        """
         status = self._decode(self._request('status', timeout))
         status = SessionStatus(**status)
         return status
@@ -293,6 +358,16 @@ class Engine:
                 return MediaType.UNKNOWN
 
     def list(self, media_types=None, timeout=10):
+        """
+        Returns list of files in the torrent (see FileStatus named tuple).
+        Note that it will return None if torrent file is not loaded yet by torrent2http client, so you may need to call
+        this method periodically until results are returned.
+
+        :param media_types: List of media types (see MediaType constants)
+        :param timeout: torrent2http client request timeout
+        :rtype : list of FileStatus
+        :return: List of files of specified media types or None if torrent is not loaded yet
+        """
         files = self._decode(self._request('ls', timeout))['files']
         if files:
             res = [FileStatus(index=index, media_type=self._detect_media_type(f['name']), **f)
@@ -302,6 +377,16 @@ class Engine:
             return res
 
     def file_status(self, file_index, timeout=10):
+        """
+        Returns file in the torrent with specified index (see FileStatus named tuple)
+        Note that it will return None if torrent file is not loaded yet by torrent2http client, so you may need to call
+        this method periodically until results are returned.
+
+        :param file_index: Requested file's index
+        :param timeout: torrent2http client request timeout
+        :return: File with specified index
+        :rtype: FileStatus
+        """
         res = self.list(timeout=timeout)
         if res:
             try:
@@ -311,6 +396,13 @@ class Engine:
                             file_index=file_index)
 
     def peers(self, timeout=10):
+        """
+        Returns list of peers connected (see PeerInfo named tuple).
+
+        :param timeout: torrent2http client request timeout
+        :return: List of peers
+        :rtype: list of PeerInfo
+        """
         peers = self._decode(self._request('peers', timeout))['peers']
         if peers:
             return [PeerInfo(**p) for p in peers]
@@ -334,8 +426,8 @@ class Engine:
             if timeout is not None:
                 kwargs['timeout'] = timeout
             return urllib2.urlopen(url, **kwargs).read()
-        except urllib2.URLError as e:
-            if isinstance(e.reason, socket.timeout):
+        except (urllib2.URLError, httplib.HTTPException) as e:
+            if isinstance(e, urllib2.URLError) and isinstance(e.reason, socket.timeout):
                 raise Error("Timeout occurred while sending command '%s' to torrent2http" % cmd, Error.TIMEOUT)
             elif not self.is_alive() and self.started:
                 raise Error("torrent2http has crashed.", Error.CRASHED)
@@ -346,9 +438,20 @@ class Engine:
             raise Error("Can't read from torrent2http: %s" % reason, Error.REQUEST_ERROR)
 
     def wait_on_close(self, wait_timeout=10):
+        """
+        By default, close() method sends shutdown command to torrent2http, stops logging and returns immediately, not
+        waiting while torrent2http exits. It can be handy to wait torrent2http to view log messages during shutdown.
+        So call this method with reasonable timeout before calling close().
+
+        :param wait_timeout: Time in seconds to wait until torrent2http client shut down
+        """
         self.wait_on_close_timeout = wait_timeout
 
     def close(self):
+        """
+        Shuts down torrent2http and stops logging. If wait_on_close() was called earlier, it will wait until
+        torrent2http successfully exits.
+        """
         if self.logpipe and self.wait_on_close_timeout is None:
             self.logpipe.close()
         if self.is_alive():
