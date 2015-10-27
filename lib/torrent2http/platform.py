@@ -15,7 +15,8 @@ class Platform:
 
     @staticmethod
     def arch():
-        if uname()[4].startswith('arm'):
+        if sys.platform.lower().startswith('linux') and (uname()[4].lower().startswith('arm') or
+                                                         uname()[4].lower().startswith('aarch')):
             return 'arm'
         elif sys.maxsize > 2**32:
             return 'x64'
@@ -35,4 +36,4 @@ class Platform:
             return 'darwin'
         else:
             raise Error("Platform %s is unknown" % sys.platform, Error.UNKNOWN_PLATFORM,
-                                    platform=sys.platform)
+                        platform=sys.platform)

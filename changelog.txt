@@ -1,3 +1,7 @@
+[B]Version 0.1.0[/B]
++ Torrent2http binaries updated to 1.0.5
++ Added Android Lollipop 5/Marshmallow 6 ARM support
+
 [B]Version 0.0.9[/B]
 + Torrent2http binaries updated to 1.0.4, LibTorrent updated to 1.0.5
 + More aggressive tracker connection
