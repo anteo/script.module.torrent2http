@@ -472,6 +472,7 @@ class Engine:
                 else:
                     self._log("torrent2http successfully shut down.")
                 self.wait_on_close_timeout = None
+            self.process.wait()
         self.started = False
         self.logpipe = None
         self.process = None
